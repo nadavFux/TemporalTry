@@ -1,12 +1,19 @@
 package temporal_workflows;
 
+import com.google.gson.Gson;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import common.DTO.BaseStock;
+import common.DTO.Root;
+import common.SectorToStocksConverter;
 
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.util.List;
 import java.util.Map;
 
 public class FetchStockActivityImpl implements FetchStockActivity {
@@ -21,13 +28,12 @@ public class FetchStockActivityImpl implements FetchStockActivity {
     }
 
     @Override
-    public String fetchStockData(int sector) throws IOException, InterruptedException {
-
+    public List<BaseStock> fetchStockData(int sector) throws IOException, InterruptedException {
         HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
                 .uri(URI.create(this.baseUrl.replace(this.replacementTemplate, String.valueOf(sector))))
                 .method("GET", HttpRequest.BodyPublishers.noBody());
-
         AddHeadersToRequestBuilder(requestBuilder);
+
         System.out.println("sending request");
         HttpRequest request = requestBuilder.build();
         HttpResponse<String> response = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
@@ -35,11 +41,12 @@ public class FetchStockActivityImpl implements FetchStockActivity {
             return null;
         }
         System.out.println("returning request");
-        var returnval = new JsonParser().parse(response.body());
-        System.out.println("exiting");
-        return returnval.toString();
+        JsonElement element = new JsonParser().parse(response.body());
+        JsonObject data = element.getAsJsonObject().getAsJsonObject("data");
+        data.remove("raw");
 
-
+        var rootValue = new Gson().fromJson(data, Root.class);
+        return SectorToStocksConverter.Convert(rootValue);
     }
 
     private void AddHeadersToRequestBuilder(HttpRequest.Builder requestBuilder) {

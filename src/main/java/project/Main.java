@@ -1,58 +1,100 @@
 package project;
 
+import common.DTO.Stock;
 import io.temporal.client.WorkflowClient;
 import io.temporal.client.WorkflowOptions;
 import io.temporal.serviceclient.WorkflowServiceStubs;
-import io.temporal.worker.Worker;
 import io.temporal.worker.WorkerFactory;
-import temporal_workflows.FetchStockActivityImpl;
-import temporal_workflows.FetchStockWorkflow;
-import temporal_workflows.FetchStockWorkflowImpl;
+import temporal_workflows.*;
 
-import java.io.IOException;
+import java.io.*;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 public class Main {
-    public static void main(String[] args) throws IOException, InterruptedException {
-        // Entry point for the Stock Analyzer Java Project
+    static final List<Integer> sectors = Arrays.asList(
+            10,
+            15,
+            20,
+            25,
+            30,
+            35,
+            40,
+            45,
+            50,
+            55,
+            60
+    );
+    static final String queueName = "EntryTaskQueue";
+
+    public static void main(String[] args) throws IOException {
         System.out.println("Starting Stock Analyzer...");
+
         WorkflowServiceStubs service = WorkflowServiceStubs.newInstance();
         WorkflowClient client = WorkflowClient.newInstance(service);
         WorkerFactory factory = WorkerFactory.newInstance(client);
 
-        ArrayList<Worker> workers = new ArrayList<Worker>();
-        workers.add(factory.newWorker("EntryTaskQueue"));
+        ConnectWorker(factory);
 
-
-        for (Worker worker : workers) {
-            worker.registerWorkflowImplementationTypes(FetchStockWorkflowImpl.class);
-            HashMap<String, String> headers = new HashMap<String, String>();
-            headers.put("api-key", "nono");
-            headers.put("date-format", "epoch");
-            String baseURL = "nono";
-            worker.registerActivitiesImplementations(new FetchStockActivityImpl(baseURL, "{code}", headers));
-        }
         factory.start();
 
+        var finalResults = ExecuteWorkflow(client);
+
+        SaveResults(finalResults, "results.txt");
+
+        System.out.println("Stock Analyzer Initialized.");
+    }
+
+    private static void ConnectWorker(WorkerFactory factory) {
+        var worker = factory.newWorker(queueName);
+        worker.registerWorkflowImplementationTypes(GetStockWorkflowImpl.class);
+
+        //TODO: Many things to keep in some organized config
+        HashMap<String, String> headers = new HashMap<>();
+        headers.put("api-key", "nono");
+        headers.put("date-format", "epoch");
+        String baseURL = "nono";
+        worker.registerActivitiesImplementations(new FetchStockActivityImpl(baseURL, "{code}", headers));
+
+        List<String> exchanges = List.of("TASE", "NYSE", "NasdaqGS");
+        worker.registerActivitiesImplementations(new FilterStockActivityImpl(exchanges, 1000000000, 80));
+
+        HashMap<String, String> identifyHeaders = new HashMap<>();
+        identifyHeaders.put("Referer", "nono");
+        identifyHeaders.put("authorization", "nono");
+        worker.registerActivitiesImplementations(new EnrichStockActivityImpl("nono", "nono", identifyHeaders, "IL-", "identifier=", headers));
+    }
+
+    private static List<Stock> ExecuteWorkflow(WorkflowClient client) {
         WorkflowOptions options = WorkflowOptions.newBuilder()
-                .setWorkflowId("StockFetcherWorkflow")
-                .setTaskQueue("EntryTaskQueue")
+                .setTaskQueue(queueName)
                 .setWorkflowRunTimeout(Duration.ofMinutes(10))
                 .build();
 
-        FetchStockWorkflow workflow = client.newWorkflowStub(FetchStockWorkflow.class, options);
-        workflow.fetchStockData(10);
+        List<CompletableFuture<List<Stock>>> results = new ArrayList<>();
+        for (int sector : sectors) {
+            GetStockWorkflow workflow = client.newWorkflowStub(GetStockWorkflow.class, options);
+            results.add(WorkflowClient.execute(workflow::getStockData, sector));
+        }
+        return results.stream().map(CompletableFuture::join).flatMap(List::stream).toList();
+    }
 
-        //WorkflowClient.start(workflow::fetchStockData, 10);
+    private static void SaveResults(List<Stock> finalResults, String fileName) throws IOException {
+        FileOutputStream fos = new FileOutputStream(fileName);
+        ObjectOutputStream oos = new ObjectOutputStream(fos);
+        oos.writeObject(finalResults);
+        oos.close();
+    }
 
-
-        // TODO: 1. Fetch stock data using Temporal workflows
-        // TODO: 2. Process data with Flink for real-time insights
-        // TODO: 3. Perform analytics with Spark for historical trends
-        // TODO: 4. Display processed data
-
-        System.out.println("Stock Analyzer Initialized.");
+    private static List<Stock> ReadResults(String fileName) throws IOException, ClassNotFoundException {
+        FileInputStream fis = new FileInputStream(fileName);
+        ObjectInputStream ois = new ObjectInputStream(fis);
+        List<Stock> stocks = (List<Stock>) ois.readObject();
+        ois.close();
+        return stocks;
     }
 }
